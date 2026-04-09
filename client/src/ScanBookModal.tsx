@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Html5Qrcode } from "html5-qrcode";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { lookupBookFromScan, type LookupError } from "./api";
 import {
   bookPayloadFromIsbnOnly,
@@ -13,9 +13,39 @@ type Props = {
   onSuccess: (payload: BookPayload) => void;
 };
 
+const BOOK_SCAN_FORMATS: Html5QrcodeSupportedFormats[] = [
+  Html5QrcodeSupportedFormats.QR_CODE,
+  Html5QrcodeSupportedFormats.EAN_13,
+  Html5QrcodeSupportedFormats.EAN_8,
+  Html5QrcodeSupportedFormats.UPC_A,
+  Html5QrcodeSupportedFormats.UPC_E,
+  Html5QrcodeSupportedFormats.CODE_128,
+  Html5QrcodeSupportedFormats.CODE_39,
+];
+
+async function getCameraConfig(): Promise<string | MediaTrackConstraints> {
+  try {
+    const devices = await Html5Qrcode.getCameras();
+    if (devices.length === 0) {
+      return { facingMode: "environment" };
+    }
+    const preferBack = devices.find((d) =>
+      /back|rear|environment|wide/i.test(d.label)
+    );
+    if (preferBack) {
+      return { deviceId: { exact: preferBack.id } };
+    }
+    return { deviceId: { exact: devices[0].id } };
+  } catch {
+    return { facingMode: "environment" };
+  }
+}
+
 export function ScanBookModal({ open, onClose, onSuccess }: Props) {
   const readerId = useRef(`qr-${Math.random().toString(36).slice(2)}`).current;
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  /** Ignore duplicate decode callbacks before stop() finishes or while a lookup is in flight. */
+  const decodeBusyRef = useRef(false);
   const onSuccessRef = useRef(onSuccess);
   const onCloseRef = useRef(onClose);
   onSuccessRef.current = onSuccess;
@@ -41,11 +71,18 @@ export function ScanBookModal({ open, onClose, onSuccess }: Props) {
   useEffect(() => {
     if (!open) return;
 
-    const scanner = new Html5Qrcode(readerId);
+    decodeBusyRef.current = false;
+    const scanner = new Html5Qrcode(readerId, {
+      formatsToSupport: BOOK_SCAN_FORMATS,
+      verbose: false,
+    });
     scannerRef.current = scanner;
     let cancelled = false;
 
     const onDecoded = (text: string) => {
+      if (decodeBusyRef.current || cancelled) return;
+      decodeBusyRef.current = true;
+
       void (async () => {
         try {
           await scanner.stop();
@@ -53,7 +90,10 @@ export function ScanBookModal({ open, onClose, onSuccess }: Props) {
         } catch {
           // ignore
         }
-        if (cancelled) return;
+        if (cancelled) {
+          decodeBusyRef.current = false;
+          return;
+        }
         setBusy(true);
         setHint(null);
         setPendingIsbn(null);
@@ -71,28 +111,53 @@ export function ScanBookModal({ open, onClose, onSuccess }: Props) {
           }
           setScanKey((k) => k + 1);
         } finally {
+          decodeBusyRef.current = false;
           setBusy(false);
         }
       })();
     };
 
-    scanner
-      .start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 280, height: 280 } },
-        onDecoded,
-        () => {}
-      )
-      .catch((err) => {
-        setHint(
-          err instanceof Error
-            ? `Camera: ${err.message}`
-            : "Could not access the camera."
+    void (async () => {
+      const cameraConfig = await getCameraConfig();
+      if (cancelled) return;
+      try {
+        await scanner.start(
+          cameraConfig,
+          {
+            fps: 10,
+            qrbox: { width: 280, height: 280 },
+            aspectRatio: 1.777778,
+          },
+          onDecoded,
+          () => {}
         );
-      });
+      } catch (err) {
+        if (cancelled) return;
+        try {
+          await scanner.start(
+            { facingMode: "user" },
+            {
+              fps: 10,
+              qrbox: { width: 280, height: 280 },
+            },
+            onDecoded,
+            () => {}
+          );
+        } catch (err2) {
+          setHint(
+            err2 instanceof Error
+              ? `Camera: ${err2.message}`
+              : err instanceof Error
+                ? `Camera: ${err.message}`
+                : "Could not access the camera."
+          );
+        }
+      }
+    })();
 
     return () => {
       cancelled = true;
+      decodeBusyRef.current = false;
       scannerRef.current = null;
       scanner
         .stop()
@@ -141,7 +206,10 @@ export function ScanBookModal({ open, onClose, onSuccess }: Props) {
       scannerRef.current = null;
     }
 
-    const s = new Html5Qrcode(readerId);
+    const s = new Html5Qrcode(readerId, {
+      formatsToSupport: BOOK_SCAN_FORMATS,
+      verbose: false,
+    });
     setBusy(true);
     setHint(null);
     setPendingIsbn(null);

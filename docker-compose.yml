@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bookapp
+      POSTGRES_PASSWORD: bookapp
+      POSTGRES_DB: booklibrary
+    ports:
+      - "5432:5432"
+    volumes:
+      - booklibrary_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookapp -d booklibrary"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  booklibrary_pgdata:

@@ -1,0 +1,16 @@
+{
+  "name": "book-library",
+  "private": true,
+  "scripts": {
+    "git:init": "bash scripts/git-init.sh",
+    "stop:dev": "bash scripts/stop-dev.sh",
+    "dev": "concurrently -n server,client -c blue,magenta \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "setup": "npm install --prefix server && npm install --prefix client",
+    "db:up": "docker compose up -d",
+    "db:init": "npm run db:init --prefix server",
+    "db:load": "npm run db:load --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
